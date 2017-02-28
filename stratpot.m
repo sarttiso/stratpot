@@ -199,10 +199,6 @@ m = size(G,1);
 n = nincrements(bedID);
 ntraces = length(bedID);
 
-% bed variables
-beds = unique(bedID);
-nbeds = length(beds);
-
 % not necessary to compute and fit empirical variograms if the user has 
 % supplied necessary ranges, sills, and nuggets
 if ~useb0
@@ -408,22 +404,6 @@ cz   = potentialCovariance(range_all,sill_all,'model',potcovmod);
 dcz  = potentialCovariance(range_all,sill_all,'derivative',1);
 d2cz = potentialCovariance(range_all,sill_all,'derivative',2);
 
-% initialize gradient covariance functions
-cgxx = cgxxgen();
-cgyy = cgyygen();
-cgzz = cgzzgen();
-cgxy = cgxygen();
-cgxz = cgxzgen();
-cgyz = cgyzgen();
-
-% initialize gradient covariance matrices
-Cgxx = zeros(m,m);
-Cgyy = zeros(m,m);
-Cgzz = zeros(m,m);
-Cgxy = zeros(m,m);
-Cgxz = zeros(m,m);
-Cgyz = zeros(m,m);
-
 % construct gradient covariance matrices from functions
 
 % distance here does not depend on the ncoorddist variable because, as in
@@ -434,35 +414,35 @@ Cgyz = zeros(m,m);
 % is a nested potential covariance model, and each of these nested
 % potential covariance models assumes that the corresponding axes of
 % anisotropy are along the coordinate axes.
-for j = 1:m
+
+% covariance symmetric, compute upper triangular
+% ntri = m*(m-1)/2;       % number of elements in upper triangular
+% dcztmp = zeros(ntri);   % holder for evaluations of dcz function
+theta1 = zeros(m,m);
+phi1 = zeros(m,m);
+dcztmp1 = zeros(m,m);
+d2cztmp1 = zeros(m,m);
+for j = 1:m 
     % gradients
-    for k = 1:m
+    for k = 1:m 
         dist = pG(j,:)-pG(k,:);
         % convert to spherical coordinates
-        [theta,phi,~] = cart2sph2(dist);
+        [theta1(j,k),phi1(j,k),~] = cart2sph2(dist);
         % based on inter-point angles choose best nested function by
         % finding closest direction of anisotropy
         aniidx = getAniidx(dist);
-        
-        Cgxx(j,k) = cgxx{aniidx}(theta,phi,dist);
-        Cgyy(j,k) = cgyy{aniidx}(theta,phi,dist);
-        Cgzz(j,k) = cgzz{aniidx}(theta,phi,dist);
-        Cgxy(j,k) = cgxy{aniidx}(theta,phi,dist);
-        Cgxz(j,k) = cgxz{aniidx}(theta,phi,dist);
-        Cgyz(j,k) = cgyz{aniidx}(theta,phi,dist);
+        dcztmp1(j,k) = dcz{aniidx}(dist);
+        d2cztmp1(j,k) = d2cz{aniidx}(dist);
     end
 end
-
-% initialize potential-gradient cross-covariance functions
-czgx = czgxgen();
-czgy = czgygen();
-czgz = czgzgen();
+Cgxx = cgxx(theta1,phi1,dcztmp1,d2cztmp1);
+Cgyy = cgyy(theta1,phi1,dcztmp1,d2cztmp1);
+Cgzz = cgzz(theta1,phi1,dcztmp1,d2cztmp1);
+Cgxy = cgxy(theta1,phi1,dcztmp1,d2cztmp1);
+Cgxz = cgxz(theta1,phi1,dcztmp1,d2cztmp1);
+Cgyz = cgyz(theta1,phi1,dcztmp1,d2cztmp1);
 
 % initialize potential and potential-gradient cross-covariance matrices
-Czgx = zeros(n,m);
-Czgy = zeros(n,m);
-Czgz = zeros(n,m);
-Cz   = zeros(n,n);
 
 % get indices for increments
 secondIdx = zeros(ntraces,n);
@@ -473,26 +453,34 @@ end
 secondIdx = logical(secondIdx);
 firstIdx = logical(firstIdx);
 
+theta2 = zeros(n,m);
+phi2 = zeros(n,m);
+theta1 = zeros(n,m);
+phi1 = zeros(n,m);
+dcztmp1 = zeros(n,m);
+dcztmp2 = zeros(n,m);
+rdist1 = zeros(n,m);
+rdist2 = zeros(n,m);
+Cz   = zeros(n,n);
 % construct potential and potential-gradient covariance matrices
 for j = 1:n
-%     [rsecondIdx, rfirstIdx] = incrementIdx(bedID,j,n);
     % cross-covariance, gradient and increments 
     for k = 1:m
         % distance between gradient and jth point on bed trace
         dist2 = pZ(secondIdx(:,j),:) - pG(k,:);
         dist1 = pZ(firstIdx(:,j),:) - pG(k,:);
+        % compute magnitude
+        rdist2(j,k) = norm(dist2);
+        rdist1(j,k) = norm(dist1);
         % convert to spherical coordinates
-        [theta2,phi2,~] = cart2sph2(dist2);
-        [theta1,phi1,~] = cart2sph2(dist1);
+        [theta2(j,k),phi2(j,k),~] = cart2sph2(dist2);
+        [theta1(j,k),phi1(j,k),~] = cart2sph2(dist1);
         % get indices of nested covariance models to use
         aniidx2 = getAniidx(dist2);
         aniidx1 = getAniidx(dist1);
-        Czgx(j,k) = czgx{aniidx2}(theta2,phi2,dist2) - ...
-            czgx{aniidx1}(theta1,phi1,dist1);
-        Czgy(j,k) = czgy{aniidx2}(theta2,phi2,dist2) - ...
-            czgy{aniidx1}(theta1,phi1,dist1);
-        Czgz(j,k) = czgz{aniidx2}(theta2,phi2,dist2) - ...
-            czgz{aniidx1}(theta1,phi1,dist1);
+        dcztmp2(j,k) = dcz{aniidx2}(dist2);
+        dcztmp1(j,k) = dcz{aniidx1}(dist1);
+        
     end  
     % increments
     for k = 1:n
@@ -501,14 +489,17 @@ for j = 1:n
         distrsj1 = pZ(firstIdx(:,j),:) - pZ(secondIdx(:,k),:);
         distrs11 = pZ(firstIdx(:,j),:) - pZ(firstIdx(:,k),:);
         Cz(j,k) = cz{getAniidx(distrsjk)}(distrsjk) - ...
-            cz{getAniidx(distrs1k)}(distrs1k) - ...
-            cz{getAniidx(distrsj1)}(distrsj1) + ...
-            cz{getAniidx(distrs11)}(distrs11);
+                  cz{getAniidx(distrs1k)}(distrs1k) - ...
+                  cz{getAniidx(distrsj1)}(distrsj1) + ...
+                  cz{getAniidx(distrs11)}(distrs11);
     end
     
 end
+Czgx = czgx(theta2,phi2,rdist2,dcztmp2) - czgx(theta1,phi1,rdist1,dcztmp1);
+Czgy = czgy(theta2,phi2,rdist2,dcztmp2) - czgy(theta1,phi1,rdist1,dcztmp1);
+Czgz = czgz(theta2,phi2,rdist2,dcztmp2) - czgz(theta1,phi1,rdist1,dcztmp1);
 
-
+clear theta1 phi1 theta2 phi2 dcztmp1 dcztmp2 d2cztmp rdist1 rdist2
 %% DRIFT BASIS FUNCTIONS
 
 if strcmp(krigdrift,'linear')
@@ -666,21 +657,25 @@ Zsampled = krigeZ(X);
     % krige potential
     function  Z = krigeZ(p)
         Z = zeros(size(p,1),1);
+        % consider each input point
         for jj = 1:size(p,1)
             % five terms in interpolator
             terms = zeros(5,1);
             % gradient-increment cross-covariance
+            % distance components of each gradient measurement from point
+            distf = bsxfun(@minus,p(jj,:),pG);
+            % distance magnitudes
+            rf = sqrt(sum(distf.^2,2));
+            % spherical coordinates
+            [thetaf,phif,~] = cart2sph2(distf);
+            dczf = zeros(m,1);
             for kk = 1:m
-                distf = p(jj,:) - pG(kk,:);
-                [thetaf,phif,~] = cart2sph2(distf);
-                aniidxf = getAniidx(distf);
-                terms(1) = terms(1) + ...
-                    wx(kk)*czgx{aniidxf}(thetaf,phif,distf);
-                terms(2) = terms(2) + ...
-                    wy(kk)*czgy{aniidxf}(thetaf,phif,distf);
-                terms(3) = terms(3) + ...
-                    wz(kk)*czgz{aniidxf}(thetaf,phif,distf);
+                aniidxf = getAniidx(distf(kk,:));
+                dczf(kk) = dcz{aniidxf}(distf(kk,:));
             end
+            terms(1) = dot(wx,czgx(thetaf,phif,rf,dczf));
+            terms(2) = dot(wy,czgy(thetaf,phif,rf,dczf));
+            terms(3) = dot(wz,czgz(thetaf,phif,rf,dczf));
             % increment covariance
             for kk = 1:n
                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
@@ -699,115 +694,115 @@ Zsampled = krigeZ(X);
     end
 
     % krige x component of gradient of potential
-    function dZx = krigeDZx(p)
-        dZx = zeros(size(p,1),1);
-        for jj = 1:size(p,1)
-            % five terms in interpolator
-            terms = zeros(5,1);
-            % gradient-increment cross-covariance
-            for kk = 1:m
-                distf = p(jj,:) - pG(kk,:);
-                [thetaf,phif,~] = cart2sph2(distf);
-                aniidxf = getAniidx(distf);
-                terms(1) = terms(1) + ...
-                    wx(kk)*cgxx{aniidxf}(thetaf,phif,distf);
-                terms(2) = terms(2) + ...
-                    wy(kk)*cgxy{aniidxf}(thetaf,phif,distf); 
-                terms(3) = terms(3) + ...
-                    wz(kk)*cgxz{aniidxf}(thetaf,phif,distf);
-            end
-            % increment covariance
-            for kk = 1:n
-                distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-                distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-                [thetaf2,phif2,~] = cart2sph2(distf2);
-                [thetaf1,phif1,~] = cart2sph2(distf1);
-                terms(4) = terms(4) + ...
-                    wI(kk)*(czgx{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-                            czgx{getAniidx(distf1)}(thetaf1,phif1,distf1));
-            end
-            % drift
-            for kk = 1:ndrift
-                terms(5) = terms(5) + ...
-                    wd(kk)*dfx{kk}(p(jj,1),p(jj,2),p(jj,3));
-            end
-            dZx(jj,1) = sum(terms);
-        end
-    end
+%     function dZx = krigeDZx(p)
+%         dZx = zeros(size(p,1),1);
+%         for jj = 1:size(p,1)
+%             % five terms in interpolator
+%             terms = zeros(5,1);
+%             % gradient-increment cross-covariance
+%             for kk = 1:m
+%                 distf = p(jj,:) - pG(kk,:);
+%                 [thetaf,phif,~] = cart2sph2(distf);
+%                 aniidxf = getAniidx(distf);
+%                 terms(1) = terms(1) + ...
+%                     wx(kk)*cgxx{aniidxf}(thetaf,phif,distf);
+%                 terms(2) = terms(2) + ...
+%                     wy(kk)*cgxy{aniidxf}(thetaf,phif,distf); 
+%                 terms(3) = terms(3) + ...
+%                     wz(kk)*cgxz{aniidxf}(thetaf,phif,distf);
+%             end
+%             % increment covariance
+%             for kk = 1:n
+%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
+%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
+%                 [thetaf2,phif2,~] = cart2sph2(distf2);
+%                 [thetaf1,phif1,~] = cart2sph2(distf1);
+%                 terms(4) = terms(4) + ...
+%                     wI(kk)*(czgx{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
+%                             czgx{getAniidx(distf1)}(thetaf1,phif1,distf1));
+%             end
+%             % drift
+%             for kk = 1:ndrift
+%                 terms(5) = terms(5) + ...
+%                     wd(kk)*dfx{kk}(p(jj,1),p(jj,2),p(jj,3));
+%             end
+%             dZx(jj,1) = sum(terms);
+%         end
+%     end
 
     % krige y component of gradient of potential
-    function dZy = krigeDZy(p)
-        dZy = zeros(size(p,1),1);
-        for jj = 1:size(p,1)
-            % four terms in interpolator
-            terms = zeros(5,1);
-            % gradient-increment cross-covariance
-            for kk = 1:m
-                distf = p(jj,:) - pG(kk,:);
-                [thetaf,phif,~] = cart2sph2(distf);
-                aniidxf = getAniidx(distf);
-                terms(1) = terms(1) + ...
-                    wx(kk)*cgxy{aniidxf}(thetaf,phif,distf);
-                terms(2) = terms(2) + ...
-                    wy(kk)*cgyy{aniidxf}(thetaf,phif,distf);
-                terms(3) = terms(3) + ...
-                    wz(kk)*cgyz{aniidxf}(thetaf,phif,distf);
-            end
-            % increment covariance
-            for kk = 1:n
-                distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-                distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-                [thetaf2,phif2,~] = cart2sph2(distf2);
-                [thetaf1,phif1,~] = cart2sph2(distf1);
-                terms(4) = terms(4) + ...
-                 wI(kk)*(czgy{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-                         czgy{getAniidx(distf1)}(thetaf1,phif1,distf1));
-            end
-            % drift
-            for kk = 1:ndrift
-                terms(5) = terms(5) + ...
-                    wd(kk)*dfy{kk}(p(jj,1),p(jj,2),p(jj,3));
-            end
-            dZy(jj,1) = sum(terms);
-        end
-    end
+%     function dZy = krigeDZy(p)
+%         dZy = zeros(size(p,1),1);
+%         for jj = 1:size(p,1)
+%             % four terms in interpolator
+%             terms = zeros(5,1);
+%             % gradient-increment cross-covariance
+%             for kk = 1:m
+%                 distf = p(jj,:) - pG(kk,:);
+%                 [thetaf,phif,~] = cart2sph2(distf);
+%                 aniidxf = getAniidx(distf);
+%                 terms(1) = terms(1) + ...
+%                     wx(kk)*cgxy{aniidxf}(thetaf,phif,distf);
+%                 terms(2) = terms(2) + ...
+%                     wy(kk)*cgyy{aniidxf}(thetaf,phif,distf);
+%                 terms(3) = terms(3) + ...
+%                     wz(kk)*cgyz{aniidxf}(thetaf,phif,distf);
+%             end
+%             % increment covariance
+%             for kk = 1:n
+%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
+%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
+%                 [thetaf2,phif2,~] = cart2sph2(distf2);
+%                 [thetaf1,phif1,~] = cart2sph2(distf1);
+%                 terms(4) = terms(4) + ...
+%                  wI(kk)*(czgy{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
+%                          czgy{getAniidx(distf1)}(thetaf1,phif1,distf1));
+%             end
+%             % drift
+%             for kk = 1:ndrift
+%                 terms(5) = terms(5) + ...
+%                     wd(kk)*dfy{kk}(p(jj,1),p(jj,2),p(jj,3));
+%             end
+%             dZy(jj,1) = sum(terms);
+%         end
+%     end
 
     % krige z component of gradient of potential
-    function dZz = krigeDZz(p)
-        dZz = zeros(size(p,1),1);
-        for jj = 1:size(p,1)
-            % four terms in interpolator
-            terms = zeros(5,1);
-            % gradient-increment cross-covariance
-            for kk = 1:m
-                distf = abs(p(jj,:) - pG(kk,:));
-                [thetaf,phif,~] = cart2sph2(distf);
-                aniidxf = getAniidx(distf);
-                terms(1) = terms(1) + ...
-                    wx(kk)*cgxz{aniidxf}(thetaf,phif,distf);
-                terms(2) = terms(2) + ...
-                    wy(kk)*cgyz{aniidxf}(thetaf,phif,distf);
-                terms(3) = terms(3) + ...
-                    wz(kk)*cgzz{aniidxf}(thetaf,phif,distf);
-            end
-            % increment covariance
-            for kk = 1:n
-                distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-                distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-                [thetaf2,phif2,~] = cart2sph2(distf2);
-                [thetaf1,phif1,~] = cart2sph2(distf1);
-                terms(4) = terms(4) + ...
-                 wI(kk)*(czgz{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-                         czgz{getAniidx(distf1)}(thetaf1,phif1,distf1));
-            end
-            % drift
-            for kk = 1:ndrift
-                terms(5) = terms(5) + ...
-                    wd(kk)*dfz{kk}(p(jj,1),p(jj,2),p(jj,3));
-            end
-            dZz(jj,1) = sum(terms);
-        end
-    end
+%     function dZz = krigeDZz(p)
+%         dZz = zeros(size(p,1),1);
+%         for jj = 1:size(p,1)
+%             % four terms in interpolator
+%             terms = zeros(5,1);
+%             % gradient-increment cross-covariance
+%             for kk = 1:m
+%                 distf = abs(p(jj,:) - pG(kk,:));
+%                 [thetaf,phif,~] = cart2sph2(distf);
+%                 aniidxf = getAniidx(distf);
+%                 terms(1) = terms(1) + ...
+%                     wx(kk)*cgxz{aniidxf}(thetaf,phif,distf);
+%                 terms(2) = terms(2) + ...
+%                     wy(kk)*cgyz{aniidxf}(thetaf,phif,distf);
+%                 terms(3) = terms(3) + ...
+%                     wz(kk)*cgzz{aniidxf}(thetaf,phif,distf);
+%             end
+%             % increment covariance
+%             for kk = 1:n
+%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
+%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
+%                 [thetaf2,phif2,~] = cart2sph2(distf2);
+%                 [thetaf1,phif1,~] = cart2sph2(distf1);
+%                 terms(4) = terms(4) + ...
+%                  wI(kk)*(czgz{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
+%                          czgz{getAniidx(distf1)}(thetaf1,phif1,distf1));
+%             end
+%             % drift
+%             for kk = 1:ndrift
+%                 terms(5) = terms(5) + ...
+%                     wd(kk)*dfz{kk}(p(jj,1),p(jj,2),p(jj,3));
+%             end
+%             dZz(jj,1) = sum(terms);
+%         end
+%     end
 
 %% covariance functions
 
@@ -817,76 +812,37 @@ Zsampled = krigeZ(X);
 % normalized by 1/r
 % h is the 3-components of displacement
 
-    function cgxx = cgxxgen()
-        cgxx = cell(ndir);
-        for jj = 1:ndir
-            cgxx{jj} = @(theta,phi,h) ...
-                (sin(phi)^2*cos(theta)^2 - 1) * dcz{jj}(h) - ...
-                (sin(phi)^2*cos(theta)^2) * d2cz{jj}(h);
-        end
+    function C = cgxx(theta,phi,dcz,d2cz)
+        C = (sin(phi).^2.*cos(theta).^2 - 1) .* dcz - ...
+            (sin(phi).^2.*cos(theta).^2) .* d2cz;
     end
-    function cgyy = cgyygen()
-        cgyy = cell(ndir);
-        for jj = 1:ndir
-            cgyy{jj} = @(theta,phi,h) ...
-                (sin(phi)^2*sin(theta)^2 - 1) * dcz{jj}(h) - ...
-                (sin(phi)^2*sin(theta)^2) * d2cz{jj}(h);
-        end
+    function C = cgyy(theta,phi,dcz,d2cz)
+        C = (sin(phi).^2.*sin(theta).^2 - 1) .* dcz - ...
+            (sin(phi).^2.*sin(theta).^2) .* d2cz;
     end
-    function cgzz = cgzzgen()
-        cgzz = cell(ndir);
-        for jj = 1:ndir
-            cgzz{jj} = @(theta,phi,h) ...
-                (cos(phi)^2 - 1) * dcz{jj}(h) - ...
-                (cos(phi)^2) * d2cz{jj}(h);
-        end
+    function C = cgzz(theta,phi,dcz,d2cz) % only phi-dependence!!!
+        C = (cos(phi).^2 - 1) .* dcz - ...
+            (cos(phi).^2) .* d2cz;
     end
-    function cgxy = cgxygen()
-        cgxy = cell(ndir);
-        for jj = 1:ndir
-            cgxy{jj} = @(theta,phi,h) ...
-                (sin(phi)^2*cos(theta)*sin(theta)) * ...
-                (dcz{jj}(h) - d2cz{jj}(h));
-        end
+    function C = cgxy(theta,phi,dcz,d2cz)
+        C = (sin(phi).^2.*cos(theta).*sin(theta)) .* (dcz - d2cz);
     end
-    function cgxz = cgxzgen()
-        cgxz = cell(ndir);
-        for jj = 1:ndir
-            cgxz{jj} = @(theta,phi,h) ...
-                (sin(phi)*cos(theta)*cos(phi)) * ...
-                (dcz{jj}(h) - d2cz{jj}(h));
-        end
+    function C = cgxz(theta,phi,dcz,d2cz)
+        C = (sin(phi).*cos(theta).*cos(phi)) .* (dcz - d2cz);
     end
-    function cgyz = cgyzgen()
-        cgyz = cell(ndir);
-        for jj = 1:ndir
-            cgyz{jj} = @(theta,phi,h) ...
-                (sin(phi)*sin(theta)*cos(phi)) * ...
-                (dcz{jj}(h) - d2cz{jj}(h));
-        end
+    function C = cgyz(theta,phi,dcz,d2cz)
+        C = (sin(phi).*sin(theta).*cos(phi)) .* (dcz - d2cz);
     end
 
 % gradient-potential cross-covariance models
-    function czgx = czgxgen()
-        czgx = cell(ndir);
-        for jj = 1:ndir
-            czgx{jj} = @(theta,phi,h) ...
-                -norm(h)*sin(phi)*cos(theta) * dcz{jj}(h);
-        end
+    function C = czgx(theta,phi,r,dcz)
+        C = -r.*sin(phi).*cos(theta) .* dcz;
     end
-    function czgy = czgygen()
-        czgy = cell(ndir);
-        for jj = 1:ndir
-            czgy{jj} = @(theta,phi,h) ...
-                -norm(h)*sin(phi)*sin(theta) * dcz{jj}(h);
-        end
+    function C = czgy(theta,phi,r,dcz)
+        C = -r.*sin(phi).*sin(theta) .* dcz;
     end
-    function czgz = czgzgen()
-        czgz = cell(ndir);
-        for jj = 1:ndir
-            czgz{jj} = @(theta,phi,h) ...
-                -norm(h)*cos(phi) * dcz{jj}(h);
-        end
+    function C = czgz(theta,phi,r,dcz)
+        C = -r.*cos(phi) .* dcz;
     end
 
 %% find index of anisotropy when forming kriging matrices

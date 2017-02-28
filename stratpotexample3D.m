@@ -20,7 +20,7 @@ sill = 1;
 drf = 'linear';
 
 % points at which to interpolate
-n = 15;
+n = 50;
 x = linspace(0,1,n);
 y = x;
 z = x;
