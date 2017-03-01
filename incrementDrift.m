@@ -38,7 +38,7 @@ function Fi = incrementDrift(p,bedID,varargin)
     if strcmp(order,'linear')
         Fi = zeros(D,n);
         for j = 1:n
-            [secondIdx, firstIdx] = incrementIdx(bedID,j);
+            [secondIdx, firstIdx] = incrementIdx(bedID,n,'increment',j);
             for k = 1:D
                 Fi(k,j) = p(secondIdx,k)-p(firstIdx,k);
             end
