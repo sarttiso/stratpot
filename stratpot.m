@@ -415,85 +415,163 @@ d2cz = potentialCovariance(range_all,sill_all,'derivative',2);
 % potential covariance models assumes that the corresponding axes of
 % anisotropy are along the coordinate axes.
 
-% covariance symmetric, compute upper triangular
-% ntri = m*(m-1)/2;       % number of elements in upper triangular
-% dcztmp = zeros(ntri);   % holder for evaluations of dcz function
-theta1 = zeros(m,m);
-phi1 = zeros(m,m);
-dcztmp1 = zeros(m,m);
-d2cztmp1 = zeros(m,m);
-for j = 1:m 
-    % gradients
-    for k = 1:m 
-        dist = pG(j,:)-pG(k,:);
-        % convert to spherical coordinates
-        [theta1(j,k),phi1(j,k),~] = cart2sph2(dist);
-        % based on inter-point angles choose best nested function by
-        % finding closest direction of anisotropy
-        aniidx = getAniidx(dist);
-        dcztmp1(j,k) = dcz{aniidx}(dist);
-        d2cztmp1(j,k) = d2cz{aniidx}(dist);
-    end
+% might have to split this up into chunks like krigeZ (depending on input
+% data size)
+
+% create repeated pG matrices to compute distances
+pGrep1 = repmat(pG,1,1,m);
+pGrep2 = permute(pGrep1,[3,2,1]);
+% compute intergradient distances
+distGG = pGrep1 - pGrep2;
+% permute into m*m x 3 matrix
+distGGper = reshape(permute(distGG,[3,1,2]),m*m,3);
+% convert to spherical coordinates
+[thetaGG,phiGG,~] = cart2sph2(distGGper);
+% reshape into matrices
+thetaGG = reshape(thetaGG,m,m)';
+phiGG = reshape(phiGG,m,m)';
+% compute indices of directions of anisotropy
+aniidxGG = getAniidx(distGGper);
+% vectors to hold covariances
+dczGG = zeros(m*m,1);
+d2czGG = zeros(m*m,1);
+% compute direction-dependent covariances
+for j = 1:ndir
+    dczGG(aniidxGG==j) = dcz{j}(distGGper(aniidxGG==j,:));
+    d2czGG(aniidxGG==j) = d2cz{j}(distGGper(aniidxGG==j,:));
 end
-Cgxx = cgxx(theta1,phi1,dcztmp1,d2cztmp1);
-Cgyy = cgyy(theta1,phi1,dcztmp1,d2cztmp1);
-Cgzz = cgzz(theta1,phi1,dcztmp1,d2cztmp1);
-Cgxy = cgxy(theta1,phi1,dcztmp1,d2cztmp1);
-Cgxz = cgxz(theta1,phi1,dcztmp1,d2cztmp1);
-Cgyz = cgyz(theta1,phi1,dcztmp1,d2cztmp1);
+% reshape into matrices
+dczGG = reshape(dczGG,m,m)';
+d2czGG = reshape(d2czGG,m,m)';
 
-% initialize potential and potential-gradient cross-covariance matrices
+% compute actual gradient covariances
+Cgxx = cgxx(thetaGG,phiGG,dczGG,d2czGG);
+Cgyy = cgyy(thetaGG,phiGG,dczGG,d2czGG);
+Cgzz = cgzz(thetaGG,phiGG,dczGG,d2czGG);
+Cgxy = cgxy(thetaGG,phiGG,dczGG,d2czGG);
+Cgxz = cgxz(thetaGG,phiGG,dczGG,d2czGG);
+Cgyz = cgyz(thetaGG,phiGG,dczGG,d2czGG);
 
+% compute gradient-bedtrace distances
+pZrep = repmat(pZ,1,1,m);
+pGrep = permute(repmat(pG,1,1,ntraces),[3,2,1]);
+distZG = pZrep - pGrep;
+% permute into ntraces*m x 3 matrix (bundles of gradients for each point on
+% bed trace)
+distZGper = reshape(permute(distZG,[3,1,2]),ntraces*m,3);
 % get indices for increments
 [secondIdx,firstIdx] = incrementIdx(bedID,n);
+% restructure indices to index permuted distances
+secondIdxZG = reshape(...
+    bsxfun(@plus,[1:1:m]',repmat((secondIdx-1)',m,1)*m) ,n*m,1);
+firstIdxZG = reshape(...
+    bsxfun(@plus,[1:1:m]',repmat((firstIdx-1)',m,1)*m) ,n*m,1);
+% get increment distances
+distZGper2 = distZGper(secondIdxZG,:);
+distZGper1 = distZGper(firstIdxZG,:);
+% get increment distance norms
+distZGnorm = sqrt(sum(distZGper.^2, 2));
+distZGnorm2 = distZGnorm(secondIdxZG);
+distZGnorm1 = distZGnorm(firstIdxZG);
+% reshape into matrices
+distZGnorm2 = reshape(distZGnorm2,m,n)';
+distZGnorm1 = reshape(distZGnorm1,m,n)';
+% get spherical coordinates
+[thetaZG,phiZG,~] = cart2sph2(distZGper);
+thetaZG2 = thetaZG(secondIdxZG);
+phiZG2 = phiZG(secondIdxZG);
+thetaZG1 = thetaZG(firstIdxZG);
+phiZG1 = phiZG(firstIdxZG);
+% reshape angle vectors into matrices
+thetaZG2 = reshape(thetaZG2,m,n)';
+phiZG2 = reshape(phiZG2,m,n)';
+thetaZG1 = reshape(thetaZG1,m,n)';
+phiZG1 = reshape(phiZG1,m,n)';
+% get anisotropy indices
+aniidxZG2 = getAniidx(distZGper2);
+aniidxZG1 = getAniidx(distZGper1);
+% initialize covariance matrices
+dczZG2 = zeros(n*m,1);
+dczZG1 = zeros(n*m,1);
 
-theta2 = zeros(n,m);
-phi2 = zeros(n,m);
-theta1 = zeros(n,m);
-phi1 = zeros(n,m);
-dcztmp1 = zeros(n,m);
-dcztmp2 = zeros(n,m);
-rdist1 = zeros(n,m);
-rdist2 = zeros(n,m);
-Cz   = zeros(n,n);
-% construct potential and potential-gradient covariance matrices
-for j = 1:n
-    % cross-covariance, gradient and increments 
-    for k = 1:m
-        % distance between gradient and jth point on bed trace
-        dist2 = pZ(secondIdx(j),:) - pG(k,:);
-        dist1 = pZ(firstIdx(j),:) - pG(k,:);
-        % compute magnitude
-        rdist2(j,k) = norm(dist2);
-        rdist1(j,k) = norm(dist1);
-        % convert to spherical coordinates
-        [theta2(j,k),phi2(j,k),~] = cart2sph2(dist2);
-        [theta1(j,k),phi1(j,k),~] = cart2sph2(dist1);
-        % get indices of nested covariance models to use
-        aniidx2 = getAniidx(dist2);
-        aniidx1 = getAniidx(dist1);
-        dcztmp2(j,k) = dcz{aniidx2}(dist2);
-        dcztmp1(j,k) = dcz{aniidx1}(dist1);
-        
-    end  
-    % increments
-    for k = 1:n
-        distrsjk = pZ(secondIdx(j),:) - pZ(secondIdx(k),:);
-        distrs1k = pZ(secondIdx(j),:) - pZ(firstIdx(k),:);
-        distrsj1 = pZ(firstIdx(j),:) - pZ(secondIdx(k),:);
-        distrs11 = pZ(firstIdx(j),:) - pZ(firstIdx(k),:);
-        Cz(j,k) = cz{getAniidx(distrsjk)}(distrsjk) - ...
-                  cz{getAniidx(distrs1k)}(distrs1k) - ...
-                  cz{getAniidx(distrsj1)}(distrsj1) + ...
-                  cz{getAniidx(distrs11)}(distrs11);
-    end
-    
+for j = 1:ndir
+    dczZG2(aniidxZG2==j) = dcz{j}(distZGper2(aniidxZG2==j,:));
+    dczZG1(aniidxZG1==j) = dcz{j}(distZGper1(aniidxZG1==j,:));
 end
-Czgx = czgx(theta2,phi2,rdist2,dcztmp2) - czgx(theta1,phi1,rdist1,dcztmp1);
-Czgy = czgy(theta2,phi2,rdist2,dcztmp2) - czgy(theta1,phi1,rdist1,dcztmp1);
-Czgz = czgz(theta2,phi2,rdist2,dcztmp2) - czgz(theta1,phi1,rdist1,dcztmp1);
 
-clear theta1 phi1 theta2 phi2 dcztmp1 dcztmp2 d2cztmp rdist1 rdist2
+% reshape
+dczZG2 = reshape(dczZG2,m,n)';
+dczZG1 = reshape(dczZG1,m,n)';
+
+% compute increment-gradient cross-covariances
+Czgx = czgx(thetaZG2,phiZG2,distZGnorm2,dczZG2) - ...
+       czgx(thetaZG1,phiZG1,distZGnorm1,dczZG1);
+Czgy = czgy(thetaZG2,phiZG2,distZGnorm2,dczZG2) - ...
+       czgy(thetaZG1,phiZG1,distZGnorm1,dczZG1);
+Czgz = czgz(thetaZG2,phiZG2,distZGnorm2,dczZG2) - ...
+       czgz(thetaZG1,phiZG1,distZGnorm1,dczZG1);
+
+% increment-increment
+% create repeated pZ matrices to compute distances
+pZrep1 = repmat(pZ,1,1,ntraces);
+pZrep2 = permute(pZrep1,[3,2,1]);
+% compute inter-bed trace distances
+distZZ = pZrep1 - pZrep2;
+distZZper = reshape(permute(distZZ,[3,1,2]),ntraces*ntraces,3);
+% get appropriate increment indices for distances
+uvIdxZZ = reshape(...
+    bsxfun(@plus,secondIdx,repmat((secondIdx-1)',n,1)*ntraces) ,n*n,1);
+iuIdxZZ = reshape(...
+    bsxfun(@plus,firstIdx,repmat((secondIdx-1)',n,1)*ntraces) ,n*n,1);
+viIdxZZ = reshape(...
+    bsxfun(@plus,secondIdx,repmat((firstIdx-1)',n,1)*ntraces) ,n*n,1);
+iiIdxZZ = reshape(...
+    bsxfun(@plus,firstIdx,repmat((firstIdx-1)',n,1)*ntraces) ,n*n,1);
+% separate distances
+distuv = distZZper(uvIdxZZ,:);
+dist1u = distZZper(iuIdxZZ,:);
+distv1 = distZZper(viIdxZZ,:);
+dist11 = distZZper(iiIdxZZ,:);
+% get indices of anisotropy
+aniidxUV = getAniidx(distuv);
+aniidx1U = getAniidx(dist1u);
+aniidxV1 = getAniidx(distv1);
+aniidx11 = getAniidx(dist11);
+% covariances
+czUV = zeros(n*n,1);
+cz1U = zeros(n*n,1);
+czV1 = zeros(n*n,1);
+cz11 = zeros(n*n,1);
+% compute covariances
+for j = 1:ndir
+    czUV(aniidxUV==j) = cz{j}(distuv(aniidxUV==j,:));
+    cz1U(aniidx1U==j) = cz{j}(dist1u(aniidx1U==j,:));
+    czV1(aniidxV1==j) = cz{j}(distv1(aniidxV1==j,:));
+    cz11(aniidx11==j) = cz{j}(dist11(aniidx11==j,:));
+end
+% reshape
+czUV = reshape(czUV,n,n)';
+cz1U = reshape(cz1U,n,n)';
+czV1 = reshape(czV1,n,n)';
+cz11 = reshape(cz11,n,n)';
+% compute final covariance for increments
+Cz = czUV - cz1U - czV1 + cz11;
+% construct potential and potential-gradient covariance matrices
+% for j = 1:n  
+%     % increments
+%     for k = 1:n
+%         distrsjk = pZ(secondIdx(j),:) - pZ(secondIdx(k),:);
+%         distrs1k = pZ(secondIdx(j),:) - pZ(firstIdx(k),:);
+%         distrsj1 = pZ(firstIdx(j),:) - pZ(secondIdx(k),:);
+%         distrs11 = pZ(firstIdx(j),:) - pZ(firstIdx(k),:);
+%         Cz(j,k) = cz{getAniidx(distrsjk)}(distrsjk) - ...
+%                   cz{getAniidx(distrs1k)}(distrs1k) - ...
+%                   cz{getAniidx(distrsj1)}(distrsj1) + ...
+%                   cz{getAniidx(distrs11)}(distrs11);
+%     end
+%     
+% end
+
 %% DRIFT BASIS FUNCTIONS
 
 if strcmp(krigdrift,'linear')
@@ -579,7 +657,6 @@ wd = w(end-ndrift+1:end);   % weights on basis functions
 
 %% INTERPOLATE AT REQUESTED POINTS
 
-digits(8);
 % solve kriging system at given points
 Zsampled = krigeZ(X);
 
@@ -663,12 +740,12 @@ Zsampled = krigeZ(X);
         nchunks = ceil(npts/ptschunk);
         
         % create repeated pG and pZ matrices
-        pGrep = repmat(pG,1,1,ptschunk);
-        pZrep = repmat(pZ,1,1,ptschunk);
-        pGrep = permute(pGrep,[3,2,1]);
-        pZrep = permute(pZrep,[3,2,1]);
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
         % concatenate in 3rd dimension
-        pGZrep = cat(3,pGrep,pZrep);
+        pGZrep = cat(3,pGrepf,pZrepf);
         
         % create repeated weights
         wxrep = repmat(wx',ptschunk,1);
@@ -686,14 +763,14 @@ Zsampled = krigeZ(X);
                 % get indices of points in chunk
                 idxchunk = false(npts,1);
                 idxchunk((jj-1)*ptschunk+1:end) = true;
-                ptschunk = mod(npts,nchunks-1);
+                ptschunk = npts-ptschunk*(nchunks-1);
                 % recreate repeated pG and pZ matrices
-                pGrep = repmat(pG,1,1,ptschunk);
-                pZrep = repmat(pZ,1,1,ptschunk);
-                pGrep = permute(pGrep,[3,2,1]);
-                pZrep = permute(pZrep,[3,2,1]);
+                pGrepf = repmat(pG,1,1,ptschunk);
+                pZrepf = repmat(pZ,1,1,ptschunk);
+                pGrepf = permute(pGrepf,[3,2,1]);
+                pZrepf = permute(pZrepf,[3,2,1]);
                 % concatenate in 3rd dimension
-                pGZrep = cat(3,pGrep,pZrep);
+                pGZrep = cat(3,pGrepf,pZrepf);
 
                 % create repeated weights
                 wxrep = repmat(wx',ptschunk,1);
@@ -778,51 +855,6 @@ Zsampled = krigeZ(X);
             end
             Z(idxchunk) = sum(terms,2);
         end
-        % remember to change for last chunk, which is smaller    
-        
-%         % consider each input point
-%         for jj = 1:size(p,1)
-%             % five terms in interpolator
-%             terms = zeros(5,1);
-%             % gradient-increment cross-covariance
-%             % distance components of each gradient measurement from point
-%             distf = bsxfun(@minus,p(jj,:),pG);
-%             % distance magnitudes
-%             rf = sqrt(sum(distf.^2,2));
-%             % spherical coordinates
-%             [thetaf,phif,~] = cart2sph2(distf);
-%             dczf = zeros(m,1);
-%             % get indices of anisotropy
-%             aniidxf = getAniidx(distf);
-%             % loop over unique distances and compute necessary 
-%             for kk = 1:ndir
-%                 dczf(aniidxf==kk) = dcz{kk}(distf(aniidxf==kk,:));
-%             end
-%             terms(1) = dot(wx,czgx(thetaf,phif,rf,dczf));
-%             terms(2) = dot(wy,czgy(thetaf,phif,rf,dczf));
-%             terms(3) = dot(wz,czgz(thetaf,phif,rf,dczf));
-%             
-%             % increment covariance
-%             % distances between points and increments
-%             distf2 = bsxfun(@minus,p(jj,:),pZ(secondIdx,:));
-%             % inefficient, lots of repeated computations here 
-%             distf1 = bsxfun(@minus,p(jj,:),pZ(firstIdx,:));
-%             aniidxf2 = getAniidx(distf2);
-%             aniidxf1 = getAniidx(distf1);
-%             czf2 = zeros(n,1);
-%             czf1 = zeros(n,1);
-%             for kk = 1:ndir
-%                 czf2(aniidxf2==kk) = cz{kk}(distf2(aniidxf2==kk,:));
-%                 czf1(aniidxf1==kk) = cz{kk}(distf1(aniidxf1==kk,:));
-%             end
-%             terms(4) = dot(wI,czf2-czf1);
-%             % drift
-%             for kk = 1:ndrift
-%                 terms(5) = terms(5) + ...
-%                     wd(kk)*f{kk}(p(jj,1),p(jj,2),p(jj,3));
-%             end
-%             Z(jj) = sum(terms);
-%         end
     end
 
     % krige x component of gradient of potential
