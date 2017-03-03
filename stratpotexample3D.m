@@ -1,7 +1,7 @@
 function stratpotexample3D()
 
-grad = load('gradient3D.csv');
-trac = load('trace3D.csv');
+grad = load('gradientgrid3D.csv');
+trac = load('tracegrid3D.csv');
     
 %% PREPROCESS
 % separate positions and measurements
@@ -14,7 +14,7 @@ bedID = trac(:,4);
 
 % covariance model
 range = 2;
-sill = 1;
+sill = 1e-6;
 
 % drift linear, quadratic
 drf = 'linear';
@@ -34,7 +34,7 @@ pot = stratpot(pZ,bedID,pG,G,pS,range,sill, ...
     'usevarioparams',true,'krigdrift',drf);
 
 pot = reshape(pot,n,n,n);
-[dxpot,dypot,dzpot] = gradient(pot);
+% [dxpot,dypot,dzpot] = gradient(pot);
 
 
 end

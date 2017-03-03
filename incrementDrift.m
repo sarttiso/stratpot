@@ -47,7 +47,7 @@ function Fi = incrementDrift(p,bedID,varargin)
     elseif strcmp(order,'quadratic') && D == 2
         Fi = zeros(5,n);
         for j = 1:n
-            [secondIdx, firstIdx] = incrementIdx(bedID,j);
+            [secondIdx, firstIdx] = incrementIdx(bedID,n,'increment',j);
             % fill rows 1-4
             for k = 1:2
                 Fi(k,j)   = p(secondIdx,k)-p(firstIdx,k);
@@ -61,7 +61,7 @@ function Fi = incrementDrift(p,bedID,varargin)
     elseif strcmp(order,'quadratic') && D == 3
         Fi = zeros(9,n);
         for j = 1:n
-            [secondIdx, firstIdx] = incrementIdx(bedID,j);
+            [secondIdx, firstIdx] = incrementIdx(bedID,n,'increment',j);
             % fill rows 1-6
             for k = 1:3
                 Fi(k,j) = p(secondIdx,k)-p(firstIdx,k);
