@@ -17,6 +17,10 @@
 %
 % OPTIONAL:
 %
+% 'origin': parameter specifying the origin of the model; bed taken as zero
+%   potential. by default it is the mean of the points given into the model
+%   (pG, pZ). should be a three vector [x,y,z].
+%
 % parameters for variogram_emp, see description there. used if
 % 'usevarioparams' is false (by default).
 % 'ndir': (default 1, isotropic case)
@@ -81,7 +85,7 @@
 %
 % Adrian Tasistro-Hart Feb. 24 2017
 
-function Zsampled = stratpot(pZ,bedID,pG,G,X,range,sill,varargin)
+function [ZS,GS] = stratpot(pZ,bedID,pG,G,X,range,sill,varargin)
 
 
 %% PARSING
@@ -103,6 +107,7 @@ addParameter(parser,'maxdist',[],@isnumeric);
 addParameter(parser,'width',30,@isnumeric);
 addParameter(parser,'phi',0,@isnumeric);
 
+addParameter(parser,'origin',[],@isnumeric);
 addParameter(parser,'driftcor',false,@islogical);
 % by default, if using drift correction, use planes
 addParameter(parser,'driftfun','linear',@ischar);  
@@ -142,6 +147,7 @@ wid =       parser.Results.width;
 phi =       parser.Results.phi;
 
 % strat pot parameters
+origin =    parser.Results.origin;
 driftcor =  parser.Results.driftcor;
 driftfun =  parser.Results.driftfun;
 nug0 =      parser.Results.nugget;
@@ -163,6 +169,13 @@ assert(size(G,2) == 3, 'G must have x,y,z components')
 assert(size(pG,1) == size(G,1), 'pG and G must have same number of rows')
 assert(size(pZ,1) == size(bedID,1), ...
     'pZ and bedID must have same number of rows')
+
+% check origin
+if isempty(origin)
+    origin = mean(vertcat(pZ,pG));
+else
+    assert(numel(origin)==3, 'origin must be 3-vector');
+end
 
 % check vars from argin
 assert(((ndir == 1) && (ndim == 0)) || ...
@@ -193,11 +206,10 @@ end
 
 %% PRE-PROCESSING
 
-% demean position data 
-xmean = mean(vertcat(pZ,pG,X));
-pZ = bsxfun(@minus,pZ,xmean);
-pG = bsxfun(@minus,pG,xmean);
-X = bsxfun(@minus,X,xmean);
+% center position data 
+pZ = bsxfun(@minus,pZ,origin);
+pG = bsxfun(@minus,pG,origin);
+X = bsxfun(@minus,X,origin);
 
 % make sure that gradient data is unit magnitude
 G = bsxfun(@rdivide,G,sqrt(sum(G.^2,2)));
@@ -657,16 +669,18 @@ if ~isempty(parll) && isempty(par)
 elseif ~isempty(parll) && par.NumWorkers ~= parll
     delete(par);
     par = parpool(parll);
-else
+elseif isempty(parll)
     delete(par);
 end
 
 % solve kriging system at given points
-Zsampled = krigeZ(X);
-
-% delete parallel pool
-if ~isempty(parll)
-    delete(par);
+ZS = krigeZ(X);
+% if gradient data is requested, interpolate it
+if nargout == 2
+    GS = zeros(size(X));
+    GS(:,1) = krigeDZx(X); 
+    GS(:,2) = krigeDZy(X);
+    GS(:,3) = krigeDZz(X);
 end
 
 %% AUXILIARY FUNCTIONS
@@ -735,8 +749,7 @@ end
     % krige potential
     function  Z = krigeZ(p)
         % total number of points to interpolate potential at
-        npts = size(p,1);
-        
+        npts = size(p,1);  
         % break up input points into chunks for vectorization
         % number of points per chunk (limit chunks to 5,000,000x3 entries)
         ptschunk = floor(5e6/(m+ntraces));
@@ -764,7 +777,7 @@ end
         czgxf = @czgx;
         czgyf = @czgy;
         czgzf = @czgz;
-        processChunkf = @processChunk;
+        processChunkf = @processChunkZ;
         % consider each full chunk (treat last chunk differently)
 
         wat = waitbar(0,'kriging potential');
@@ -802,8 +815,6 @@ end
         wyrep = repmat(wy',ptschunk,1);
         wzrep = repmat(wz',ptschunk,1);
         wIrep = repmat(wI',ptschunk,1);
-        % five terms in interpolator
-        terms = zeros(ptschunk,5);
         % get points in last chunk
         pts = p(idxchunk,:); 
         % get potentials in last chunk
@@ -815,8 +826,9 @@ end
         % combine with potentials in previous chunks
         Z = [Z; Zlast];
     end
+
     % helper function for krigeZ, does actual interpolation
-    function  Z = processChunk(pts,ptschunk,pGZrep, ...
+    function  Z = processChunkZ(pts,ptschunk,pGZrep, ...
             wxrep,wyrep,wzrep,wIrep,getAniidxf,czgxf,czgyf,czgzf)
         
         % five terms in interpolator
@@ -896,115 +908,544 @@ end
     end
 
     % krige x component of gradient of potential
-%     function dZx = krigeDZx(p)
-%         dZx = zeros(size(p,1),1);
-%         for jj = 1:size(p,1)
-%             % five terms in interpolator
-%             terms = zeros(5,1);
-%             % gradient-increment cross-covariance
-%             for kk = 1:m
-%                 distf = p(jj,:) - pG(kk,:);
-%                 [thetaf,phif,~] = cart2sph2(distf);
-%                 aniidxf = getAniidx(distf);
-%                 terms(1) = terms(1) + ...
-%                     wx(kk)*cgxx{aniidxf}(thetaf,phif,distf);
-%                 terms(2) = terms(2) + ...
-%                     wy(kk)*cgxy{aniidxf}(thetaf,phif,distf); 
-%                 terms(3) = terms(3) + ...
-%                     wz(kk)*cgxz{aniidxf}(thetaf,phif,distf);
-%             end
-%             % increment covariance
-%             for kk = 1:n
-%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-%                 [thetaf2,phif2,~] = cart2sph2(distf2);
-%                 [thetaf1,phif1,~] = cart2sph2(distf1);
-%                 terms(4) = terms(4) + ...
-%                     wI(kk)*(czgx{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-%                             czgx{getAniidx(distf1)}(thetaf1,phif1,distf1));
-%             end
-%             % drift
-%             for kk = 1:ndrift
-%                 terms(5) = terms(5) + ...
-%                     wd(kk)*dfx{kk}(p(jj,1),p(jj,2),p(jj,3));
-%             end
-%             dZx(jj,1) = sum(terms);
-%         end
-%     end
+    function dZx = krigeDZx(p)
+        % total number of points to interpolate potential at
+        npts = size(p,1);  
+        % break up input points into chunks for vectorization
+        % number of points per chunk (limit chunks to 5,000,000x3 entries)
+        ptschunk = floor(5e6/(m+ntraces));
+        % total number of chunks
+        nchunks = ceil(npts/ptschunk);
+        % matrix to hold interpolated potentials, will need to be reshaped
+        % later
+        dZx = zeros(nchunks-1,ptschunk);
+        
+        % create repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % create repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        
+        % get necessary function handles
+        getAniidxf = @getAniidx;
+        cgxxf = @cgxx;
+        cgxyf = @cgxy;
+        cgxzf = @cgxz;
+        czgxf = @czgx;
+        processChunkf = @processChunkDZx;
+        % consider each full chunk (treat last chunk differently)
 
-    % krige y component of gradient of potential
-%     function dZy = krigeDZy(p)
-%         dZy = zeros(size(p,1),1);
-%         for jj = 1:size(p,1)
-%             % four terms in interpolator
-%             terms = zeros(5,1);
-%             % gradient-increment cross-covariance
-%             for kk = 1:m
-%                 distf = p(jj,:) - pG(kk,:);
-%                 [thetaf,phif,~] = cart2sph2(distf);
-%                 aniidxf = getAniidx(distf);
-%                 terms(1) = terms(1) + ...
-%                     wx(kk)*cgxy{aniidxf}(thetaf,phif,distf);
-%                 terms(2) = terms(2) + ...
-%                     wy(kk)*cgyy{aniidxf}(thetaf,phif,distf);
-%                 terms(3) = terms(3) + ...
-%                     wz(kk)*cgyz{aniidxf}(thetaf,phif,distf);
-%             end
-%             % increment covariance
-%             for kk = 1:n
-%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-%                 [thetaf2,phif2,~] = cart2sph2(distf2);
-%                 [thetaf1,phif1,~] = cart2sph2(distf1);
-%                 terms(4) = terms(4) + ...
-%                  wI(kk)*(czgy{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-%                          czgy{getAniidx(distf1)}(thetaf1,phif1,distf1));
-%             end
-%             % drift
-%             for kk = 1:ndrift
-%                 terms(5) = terms(5) + ...
-%                     wd(kk)*dfy{kk}(p(jj,1),p(jj,2),p(jj,3));
-%             end
-%             dZy(jj,1) = sum(terms);
-%         end
-%     end
+        wat = waitbar(0,'kriging potential');
+        % ALL BUT LAST CHUNK
+        parfor jj = 1:nchunks-1
+            % get indices of points in chunk
+            idxchunk = false(npts,1);
+            idxchunk((jj-1)*ptschunk+1:jj*ptschunk) = true;
+            % get points in chunk
+            pts = p(idxchunk,:);
+            % each iteration contributes a row to Z
+            dZx(jj,:) = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxxf,cgxyf,cgxzf,czgxf);
+            % update waitbar (in serial case)
+            if isempty(parll)
+                waitbar(jj/nchunks,wat)
+            end
+        end
+        % make Z into vector
+        dZx = reshape(dZx',numel(dZx),1);
+        % LAST CHUNK
+        % get indices of points in last chunk
+        idxchunk = false(npts,1);
+        idxchunk((nchunks-1)*ptschunk+1:end) = true;
+        ptschunk = npts-ptschunk*(nchunks-1);
+        % recreate repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % recreate repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        % get points in last chunk
+        pts = p(idxchunk,:); 
+        % get potentials in last chunk
+        Zlast = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxxf,cgxyf,cgxzf,czgxf);
+        % final update on waitbar and close it
+        waitbar(1,wat);
+        close(wat);
+        % combine with potentials in previous chunks
+        dZx = [dZx; Zlast];
+    end
 
-    % krige z component of gradient of potential
-%     function dZz = krigeDZz(p)
-%         dZz = zeros(size(p,1),1);
-%         for jj = 1:size(p,1)
-%             % four terms in interpolator
-%             terms = zeros(5,1);
-%             % gradient-increment cross-covariance
-%             for kk = 1:m
-%                 distf = abs(p(jj,:) - pG(kk,:));
-%                 [thetaf,phif,~] = cart2sph2(distf);
-%                 aniidxf = getAniidx(distf);
-%                 terms(1) = terms(1) + ...
-%                     wx(kk)*cgxz{aniidxf}(thetaf,phif,distf);
-%                 terms(2) = terms(2) + ...
-%                     wy(kk)*cgyz{aniidxf}(thetaf,phif,distf);
-%                 terms(3) = terms(3) + ...
-%                     wz(kk)*cgzz{aniidxf}(thetaf,phif,distf);
-%             end
-%             % increment covariance
-%             for kk = 1:n
-%                 distf2 = p(jj,:)-pZ(secondIdx(:,kk),:);
-%                 distf1 = p(jj,:)-pZ(firstIdx(:,kk),:);
-%                 [thetaf2,phif2,~] = cart2sph2(distf2);
-%                 [thetaf1,phif1,~] = cart2sph2(distf1);
-%                 terms(4) = terms(4) + ...
-%                  wI(kk)*(czgz{getAniidx(distf2)}(thetaf2,phif2,distf2) - ...
-%                          czgz{getAniidx(distf1)}(thetaf1,phif1,distf1));
-%             end
-%             % drift
-%             for kk = 1:ndrift
-%                 terms(5) = terms(5) + ...
-%                     wd(kk)*dfz{kk}(p(jj,1),p(jj,2),p(jj,3));
-%             end
-%             dZz(jj,1) = sum(terms);
-%         end
-%     end
+    % helper function for krigeDZx, does actual interpolation
+    function  Z = processChunkDZx(pts,ptschunk,pGZrep, ...
+            wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxxf,cgxyf,cgxzf,czgxf)
+        
+        % five terms in interpolator
+        terms = zeros(ptschunk,5);
+        
+        ptsrep = repmat(pts,1,1,m+ntraces);
+
+        % compute distances
+        distf = ptsrep - pGZrep;
+        distG = distf(:,:,1:m);
+        % negate inter-increment distances to reflect the fact that the
+        % fourth term in the interpolator is KGxZ not KZGx
+        distZ = -distf(:,:,m+1:end);
+
+        % reshape and convert distG to thetaG and phiG. We want the
+        % resulting matrix to have m*ptschunk rows, and the rows are
+        % bundled such that the first bundle has all of the distances
+        % between the first point and all the gradients, then the
+        % second bundle has the same distances for the second point,
+        % and so forth. there are 3 columns, which result in vectors
+        % for thetaG and phiG
+        % ptschunk*m x 3
+        distGper = reshape(permute(distG,[3,1,2]),m*ptschunk,3); 
+        [thetaG,phiG,~] = cart2sph2(distGper);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in m columns
+        thetaG = reshape(thetaG,m,ptschunk)';
+        phiG = reshape(phiG,m,ptschunk)';
+        % compute aniidx from point-gradient distances
+        aniidxG = getAniidxf(distGper);
+        % prepare covariance vectors
+        dczG = zeros(ptschunk*m,1);
+        d2czG = zeros(ptschunk*m,1);
+        % compute covariances using angles, distances and anisotropies
+        for kk = 1:ndir
+            dczG(aniidxG==kk) = dcz{kk}(distGper(aniidxG==kk,:));
+            d2czG(aniidxG==kk) = d2cz{kk}(distGper(aniidxG==kk,:));
+        end
+        % reshape covariances dczG
+        dczG = reshape(dczG,m,ptschunk)';
+        d2czG = reshape(d2czG,m,ptschunk)';
+        % compute first 3 terms
+        terms(:,1) = dot(wxrep,cgxxf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,2) = dot(wyrep,cgxyf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,3) = dot(wzrep,cgxzf(thetaG,phiG,dczG,d2czG),2);
+
+        % now increments
+        distZper = reshape(permute(distZ,[3,1,2]),ntraces*ptschunk,3);
+        % get distances corresponding to increments
+        % add offsets to secondIdx, firstIdx when repeating
+        offset = reshape(repmat(ntraces*[0:1:ptschunk-1],n,1), ...
+                            ptschunk*n,1);
+        secondIdxrep = repmat(secondIdx,ptschunk,1)+offset;
+        firstIdxrep = repmat(firstIdx,ptschunk,1)+offset;
+        distZper2 = distZper(secondIdxrep,:);
+        distZper1 = distZper(firstIdxrep,:);
+        % compute distance norms
+        distZnorm2 = sqrt(sum(distZper2.^2,2));
+        distZnorm1 = sqrt(sum(distZper1.^2,2));
+        % reshape
+        distZnorm2 = reshape(distZnorm2,n,ptschunk)';
+        distZnorm1 = reshape(distZnorm1,n,ptschunk)';
+        % convert to spherical coordinates
+        [thetaZ2,phiZ2,~] = cart2sph2(distZper2);
+        [thetaZ1,phiZ1,~] = cart2sph2(distZper1);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in n columns
+        thetaZ2 = reshape(thetaZ2,n,ptschunk)';
+        phiZ2 = reshape(phiZ2,n,ptschunk)';
+        thetaZ1 = reshape(thetaZ1,n,ptschunk)';
+        phiZ1 = reshape(phiZ1,n,ptschunk)';
+        % compute aniidx from distances
+        aniidxZ2 = getAniidxf(distZper2);
+        aniidxZ1 = getAniidxf(distZper1);
+        % initialize covariances
+        dczZ1 = zeros(ptschunk*n,1);
+        dczZ2 = zeros(ptschunk*n,1);
+        for kk = 1:ndir
+            dczZ2(aniidxZ2==kk) = dcz{kk}(distZper2(aniidxZ2==kk,:));
+            dczZ1(aniidxZ1==kk) = dcz{kk}(distZper1(aniidxZ1==kk,:));
+        end
+        % reshape
+        dczZ2 = reshape(dczZ2,n,ptschunk)';
+        dczZ1 = reshape(dczZ1,n,ptschunk)';
+        % compute first 3 terms
+        terms(:,4) = dot(wIrep,czgxf(thetaZ2,phiZ2,distZnorm2,dczZ2)- ...
+                               czgxf(thetaZ1,phiZ1,distZnorm1,dczZ1),2);
+        % now drift functions
+        % drift
+        for kk = 1:ndrift
+            terms(:,5) = terms(:,5) + ...
+                wd(kk)*dfx{kk}(pts(:,1),pts(:,2),pts(:,3));
+        end
+        Z = sum(terms,2);
+    end
+
+% krige y component of gradient of potential
+    function dZy = krigeDZy(p)
+        % total number of points to interpolate potential at
+        npts = size(p,1);  
+        % break up input points into chunks for vectorization
+        % number of points per chunk (limit chunks to 5,000,000x3 entries)
+        ptschunk = floor(5e6/(m+ntraces));
+        % total number of chunks
+        nchunks = ceil(npts/ptschunk);
+        % matrix to hold interpolated potentials, will need to be reshaped
+        % later
+        dZy = zeros(nchunks-1,ptschunk);
+        
+        % create repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % create repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        
+        % get necessary function handles
+        getAniidxf = @getAniidx;
+        cgxyf = @cgxy;
+        cgyyf = @cgyy;
+        cgyzf = @cgyz;
+        czgyf = @czgy;
+        processChunkf = @processChunkDZy;
+        % consider each full chunk (treat last chunk differently)
+
+        wat = waitbar(0,'kriging potential');
+        % ALL BUT LAST CHUNK
+        parfor jj = 1:nchunks-1
+            % get indices of points in chunk
+            idxchunk = false(npts,1);
+            idxchunk((jj-1)*ptschunk+1:jj*ptschunk) = true;
+            % get points in chunk
+            pts = p(idxchunk,:);
+            % each iteration contributes a row to Z
+            dZy(jj,:) = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxyf,cgyyf,cgyzf,czgyf);
+            % update waitbar (in serial case)
+            if isempty(parll)
+                waitbar(jj/nchunks,wat)
+            end
+        end
+        % make Z into vector
+        dZy = reshape(dZy',numel(dZy),1);
+        % LAST CHUNK
+        % get indices of points in last chunk
+        idxchunk = false(npts,1);
+        idxchunk((nchunks-1)*ptschunk+1:end) = true;
+        ptschunk = npts-ptschunk*(nchunks-1);
+        % recreate repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % recreate repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        % get points in last chunk
+        pts = p(idxchunk,:); 
+        % get potentials in last chunk
+        Zlast = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxyf,cgyyf,cgyzf,czgyf);
+        % final update on waitbar and close it
+        waitbar(1,wat);
+        close(wat);
+        % combine with potentials in previous chunks
+        dZy = [dZy; Zlast];
+    end
+
+% helper function for krigeDZy, does actual interpolation
+    function  Z = processChunkDZy(pts,ptschunk,pGZrep, ...
+            wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxyf,cgyyf,cgyzf,czgyf)
+        
+        % five terms in interpolator
+        terms = zeros(ptschunk,5);
+        
+        ptsrep = repmat(pts,1,1,m+ntraces);
+
+        % compute distances
+        distf = ptsrep - pGZrep;
+        distG = distf(:,:,1:m);
+        % negate inter-increment distances to reflect the fact that the
+        % fourth term in the interpolator is KGxZ not KZGx
+        distZ = -distf(:,:,m+1:end);
+
+        % reshape and convert distG to thetaG and phiG. We want the
+        % resulting matrix to have m*ptschunk rows, and the rows are
+        % bundled such that the first bundle has all of the distances
+        % between the first point and all the gradients, then the
+        % second bundle has the same distances for the second point,
+        % and so forth. there are 3 columns, which result in vectors
+        % for thetaG and phiG
+        % ptschunk*m x 3
+        distGper = reshape(permute(distG,[3,1,2]),m*ptschunk,3); 
+        [thetaG,phiG,~] = cart2sph2(distGper);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in m columns
+        thetaG = reshape(thetaG,m,ptschunk)';
+        phiG = reshape(phiG,m,ptschunk)';
+        % compute aniidx from point-gradient distances
+        aniidxG = getAniidxf(distGper);
+        % prepare covariance vectors
+        dczG = zeros(ptschunk*m,1);
+        d2czG = zeros(ptschunk*m,1);
+        % compute covariances using angles, distances and anisotropies
+        for kk = 1:ndir
+            dczG(aniidxG==kk) = dcz{kk}(distGper(aniidxG==kk,:));
+            d2czG(aniidxG==kk) = d2cz{kk}(distGper(aniidxG==kk,:));
+        end
+        % reshape covariances dczG
+        dczG = reshape(dczG,m,ptschunk)';
+        d2czG = reshape(d2czG,m,ptschunk)';
+        % compute first 3 terms
+        terms(:,1) = dot(wxrep,cgxyf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,2) = dot(wyrep,cgyyf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,3) = dot(wzrep,cgyzf(thetaG,phiG,dczG,d2czG),2);
+
+        % now increments
+        distZper = reshape(permute(distZ,[3,1,2]),ntraces*ptschunk,3);
+        % get distances corresponding to increments
+        % add offsets to secondIdx, firstIdx when repeating
+        offset = reshape(repmat(ntraces*[0:1:ptschunk-1],n,1), ...
+                            ptschunk*n,1);
+        secondIdxrep = repmat(secondIdx,ptschunk,1)+offset;
+        firstIdxrep = repmat(firstIdx,ptschunk,1)+offset;
+        distZper2 = distZper(secondIdxrep,:);
+        distZper1 = distZper(firstIdxrep,:);
+        % compute distance norms
+        distZnorm2 = sqrt(sum(distZper2.^2,2));
+        distZnorm1 = sqrt(sum(distZper1.^2,2));
+        % reshape
+        distZnorm2 = reshape(distZnorm2,n,ptschunk)';
+        distZnorm1 = reshape(distZnorm1,n,ptschunk)';
+        % convert to spherical coordinates
+        [thetaZ2,phiZ2,~] = cart2sph2(distZper2);
+        [thetaZ1,phiZ1,~] = cart2sph2(distZper1);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in n columns
+        thetaZ2 = reshape(thetaZ2,n,ptschunk)';
+        phiZ2 = reshape(phiZ2,n,ptschunk)';
+        thetaZ1 = reshape(thetaZ1,n,ptschunk)';
+        phiZ1 = reshape(phiZ1,n,ptschunk)';
+        % compute aniidx from distances
+        aniidxZ2 = getAniidxf(distZper2);
+        aniidxZ1 = getAniidxf(distZper1);
+        % initialize covariances
+        dczZ1 = zeros(ptschunk*n,1);
+        dczZ2 = zeros(ptschunk*n,1);
+        for kk = 1:ndir
+            dczZ2(aniidxZ2==kk) = dcz{kk}(distZper2(aniidxZ2==kk,:));
+            dczZ1(aniidxZ1==kk) = dcz{kk}(distZper1(aniidxZ1==kk,:));
+        end
+        % reshape
+        dczZ2 = reshape(dczZ2,n,ptschunk)';
+        dczZ1 = reshape(dczZ1,n,ptschunk)';
+        % compute first 3 terms
+        terms(:,4) = dot(wIrep,czgyf(thetaZ2,phiZ2,distZnorm2,dczZ2)- ...
+                               czgyf(thetaZ1,phiZ1,distZnorm1,dczZ1),2);
+        % now drift functions
+        % drift
+        for kk = 1:ndrift
+            terms(:,5) = terms(:,5) + ...
+                wd(kk)*dfy{kk}(pts(:,1),pts(:,2),pts(:,3));
+        end
+        Z = sum(terms,2);
+    end
+    
+% krige z component of gradient of potential
+    function dZz = krigeDZz(p)
+        % total number of points to interpolate potential at
+        npts = size(p,1);  
+        % break up input points into chunks for vectorization
+        % number of points per chunk (limit chunks to 5,000,000x3 entries)
+        ptschunk = floor(5e6/(m+ntraces));
+        % total number of chunks
+        nchunks = ceil(npts/ptschunk);
+        % matrix to hold interpolated potentials, will need to be reshaped
+        % later
+        dZz = zeros(nchunks-1,ptschunk);
+        
+        % create repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % create repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        
+        % get necessary function handles
+        getAniidxf = @getAniidx;
+        cgxzf = @cgxz;
+        cgyzf = @cgyz;
+        cgzzf = @cgzz;
+        czgzf = @czgz;
+        processChunkf = @processChunkDZz;
+        % consider each full chunk (treat last chunk differently)
+
+        wat = waitbar(0,'kriging potential');
+        % ALL BUT LAST CHUNK
+        parfor jj = 1:nchunks-1
+            % get indices of points in chunk
+            idxchunk = false(npts,1);
+            idxchunk((jj-1)*ptschunk+1:jj*ptschunk) = true;
+            % get points in chunk
+            pts = p(idxchunk,:);
+            % each iteration contributes a row to Z
+            dZz(jj,:) = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxzf,cgyzf,cgzzf,czgzf);
+            % update waitbar (in serial case)
+            if isempty(parll)
+                waitbar(jj/nchunks,wat)
+            end
+        end
+        % make Z into vector
+        dZz = reshape(dZz',numel(dZz),1);
+        % LAST CHUNK
+        % get indices of points in last chunk
+        idxchunk = false(npts,1);
+        idxchunk((nchunks-1)*ptschunk+1:end) = true;
+        ptschunk = npts-ptschunk*(nchunks-1);
+        % recreate repeated pG and pZ matrices
+        pGrepf = repmat(pG,1,1,ptschunk);
+        pZrepf = repmat(pZ,1,1,ptschunk);
+        pGrepf = permute(pGrepf,[3,2,1]);
+        pZrepf = permute(pZrepf,[3,2,1]);
+        % concatenate in 3rd dimension
+        pGZrep = cat(3,pGrepf,pZrepf);
+        % recreate repeated weights
+        wxrep = repmat(wx',ptschunk,1);
+        wyrep = repmat(wy',ptschunk,1);
+        wzrep = repmat(wz',ptschunk,1);
+        wIrep = repmat(wI',ptschunk,1);
+        % get points in last chunk
+        pts = p(idxchunk,:); 
+        % get potentials in last chunk
+        Zlast = processChunkf(pts,ptschunk,pGZrep, ...
+               wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxzf,cgyzf,cgzzf,czgzf);
+        % final update on waitbar and close it
+        waitbar(1,wat);
+        close(wat);
+        % combine with potentials in previous chunks
+        dZz = [dZz; Zlast];
+    end
+
+% helper function for krigeDZz, does actual interpolation
+    function  Z = processChunkDZz(pts,ptschunk,pGZrep, ...
+            wxrep,wyrep,wzrep,wIrep,getAniidxf,cgxzf,cgyzf,cgzzf,czgzf)
+        
+        % five terms in interpolator
+        terms = zeros(ptschunk,5);
+        
+        ptsrep = repmat(pts,1,1,m+ntraces);
+
+        % compute distances
+        distf = ptsrep - pGZrep;
+        distG = distf(:,:,1:m);
+        % negate inter-increment distances to reflect the fact that the
+        % fourth term in the interpolator is KGxZ not KZGx
+        distZ = -distf(:,:,m+1:end);
+
+        % reshape and convert distG to thetaG and phiG. We want the
+        % resulting matrix to have m*ptschunk rows, and the rows are
+        % bundled such that the first bundle has all of the distances
+        % between the first point and all the gradients, then the
+        % second bundle has the same distances for the second point,
+        % and so forth. there are 3 columns, which result in vectors
+        % for thetaG and phiG
+        % ptschunk*m x 3
+        distGper = reshape(permute(distG,[3,1,2]),m*ptschunk,3); 
+        [thetaG,phiG,~] = cart2sph2(distGper);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in m columns
+        thetaG = reshape(thetaG,m,ptschunk)';
+        phiG = reshape(phiG,m,ptschunk)';
+        % compute aniidx from point-gradient distances
+        aniidxG = getAniidxf(distGper);
+        % prepare covariance vectors
+        dczG = zeros(ptschunk*m,1);
+        d2czG = zeros(ptschunk*m,1);
+        % compute covariances using angles, distances and anisotropies
+        for kk = 1:ndir
+            dczG(aniidxG==kk) = dcz{kk}(distGper(aniidxG==kk,:));
+            d2czG(aniidxG==kk) = d2cz{kk}(distGper(aniidxG==kk,:));
+        end
+        % reshape covariances dczG
+        dczG = reshape(dczG,m,ptschunk)';
+        d2czG = reshape(d2czG,m,ptschunk)';
+        % compute first 3 terms
+        terms(:,1) = dot(wxrep,cgxzf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,2) = dot(wyrep,cgyzf(thetaG,phiG,dczG,d2czG),2);
+        terms(:,3) = dot(wzrep,cgzzf(thetaG,phiG,dczG,d2czG),2);
+
+        % now increments
+        distZper = reshape(permute(distZ,[3,1,2]),ntraces*ptschunk,3);
+        % get distances corresponding to increments
+        % add offsets to secondIdx, firstIdx when repeating
+        offset = reshape(repmat(ntraces*[0:1:ptschunk-1],n,1), ...
+                            ptschunk*n,1);
+        secondIdxrep = repmat(secondIdx,ptschunk,1)+offset;
+        firstIdxrep = repmat(firstIdx,ptschunk,1)+offset;
+        distZper2 = distZper(secondIdxrep,:);
+        distZper1 = distZper(firstIdxrep,:);
+        % compute distance norms
+        distZnorm2 = sqrt(sum(distZper2.^2,2));
+        distZnorm1 = sqrt(sum(distZper1.^2,2));
+        % reshape
+        distZnorm2 = reshape(distZnorm2,n,ptschunk)';
+        distZnorm1 = reshape(distZnorm1,n,ptschunk)';
+        % convert to spherical coordinates
+        [thetaZ2,phiZ2,~] = cart2sph2(distZper2);
+        [thetaZ1,phiZ1,~] = cart2sph2(distZper1);
+        % make into matrices with points in ptschunk rows and
+        % gradientwise distances in n columns
+        thetaZ2 = reshape(thetaZ2,n,ptschunk)';
+        phiZ2 = reshape(phiZ2,n,ptschunk)';
+        thetaZ1 = reshape(thetaZ1,n,ptschunk)';
+        phiZ1 = reshape(phiZ1,n,ptschunk)';
+        % compute aniidx from distances
+        aniidxZ2 = getAniidxf(distZper2);
+        aniidxZ1 = getAniidxf(distZper1);
+        % initialize covariances
+        dczZ1 = zeros(ptschunk*n,1);
+        dczZ2 = zeros(ptschunk*n,1);
+        for kk = 1:ndir
+            dczZ2(aniidxZ2==kk) = dcz{kk}(distZper2(aniidxZ2==kk,:));
+            dczZ1(aniidxZ1==kk) = dcz{kk}(distZper1(aniidxZ1==kk,:));
+        end
+        % reshape
+        dczZ2 = reshape(dczZ2,n,ptschunk)';
+        dczZ1 = reshape(dczZ1,n,ptschunk)';
+        % compute first 3 terms
+        terms(:,4) = dot(wIrep,czgzf(thetaZ2,phiZ2,distZnorm2,dczZ2)- ...
+                               czgzf(thetaZ1,phiZ1,distZnorm1,dczZ1),2);
+        % now drift functions
+        % drift
+        for kk = 1:ndrift
+            terms(:,5) = terms(:,5) + ...
+                wd(kk)*dfz{kk}(pts(:,1),pts(:,2),pts(:,3));
+        end
+        Z = sum(terms,2);
+    end
 
 %% covariance functions
 
