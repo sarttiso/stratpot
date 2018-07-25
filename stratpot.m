@@ -31,7 +31,7 @@
 % 'phi': (default 0)
 %
 % 'driftcor': (true/false) whether or not to correct data for drift 
-%   (default false)
+%   (default true)
 %
 % 'driftfun': ('linear','quadratic') type of surface to fit for drift
 %   correction of gradient data prior to selecting a variogram model;
@@ -78,12 +78,13 @@
 %   - MultiPolyRegress(), by Ahmet Cecen
 %   - Kriging toolbox, by Wolfgang Schwanghart and augmented by Adrian
 %       Tasistro-Hart
+%   - parfor_progressbar(), by Daniel Terry
 %
 % BUGS:
 %   - some system instability when using anisotropy sills (i.e. the nested
 %       potential covariance model has some issues)
 %
-% Adrian Tasistro-Hart Feb. 24 2017
+% Adrian Tasistro-Hart March 15 2018
 
 function [ZS,GS] = stratpot(pZ,bedID,pG,G,X,range,sill,varargin)
 
@@ -108,7 +109,7 @@ addParameter(parser,'width',30,@isnumeric);
 addParameter(parser,'phi',0,@isnumeric);
 
 addParameter(parser,'origin',[],@isnumeric);
-addParameter(parser,'driftcor',false,@islogical);
+addParameter(parser,'driftcor',true,@islogical);
 % by default, if using drift correction, use planes
 addParameter(parser,'driftfun','linear',@ischar);  
 % nugget
@@ -751,7 +752,7 @@ end
         % total number of points to interpolate potential at
         npts = size(p,1);  
         % break up input points into chunks for vectorization
-        % number of points per chunk (limit chunks to 5,000,000x3 entries)
+        % number of points per chunk (limit chunks to 3,000,000x3 entries)
         ptschunk = floor(5e6/(m+ntraces));
         % total number of chunks
         nchunks = ceil(npts/ptschunk);
@@ -780,7 +781,8 @@ end
         processChunkf = @processChunkZ;
         % consider each full chunk (treat last chunk differently)
 
-        wat = waitbar(0,'kriging potential');
+        wat = parfor_progressbar(nchunks,'kriging potential');
+
         % ALL BUT LAST CHUNK
         parfor jj = 1:nchunks-1
             % get indices of points in chunk
@@ -791,10 +793,8 @@ end
             % each iteration contributes a row to Z
             Z(jj,:) = processChunkf(pts,ptschunk,pGZrep, ...
                 wxrep,wyrep,wzrep,wIrep,getAniidxf,czgxf,czgyf,czgzf);
-            % update waitbar (in serial case)
-            if isempty(parll)
-                waitbar(jj/nchunks,wat)
-            end
+            % update waitbar
+            wat.iterate(1);
         end
         % make Z into vector
         Z = reshape(Z',numel(Z),1);
@@ -821,7 +821,7 @@ end
         Zlast = processChunkf(pts,ptschunk,pGZrep, ...
                 wxrep,wyrep,wzrep,wIrep,getAniidxf,czgxf,czgyf,czgzf);
         % final update on waitbar and close it
-        waitbar(1,wat);
+        wat.iterate(1);
         close(wat);
         % combine with potentials in previous chunks
         Z = [Z; Zlast];

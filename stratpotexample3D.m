@@ -1,4 +1,4 @@
-function stratpotexample3D()
+% function stratpotexample3D()
 
 grad = load('gradientgrid3D.csv');
 trac = load('tracegrid3D.csv');
@@ -33,8 +33,8 @@ pS = [x,y,z];
 pot = stratpot(pZ,bedID,pG,G,pS,range,sill, ...
     'usevarioparams',true,'krigdrift',drf);
 
-pot = reshape(pot,n,n,n);
+% pot = reshape(pot,n,n,n);
 % [dxpot,dypot,dzpot] = gradient(pot);
 
 
-end
+% end
