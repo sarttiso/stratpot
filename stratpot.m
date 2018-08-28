@@ -163,9 +163,10 @@ driftfun = validatestring(driftfun,{'linear','quadratic'});
 krigdrift = validatestring(krigdrift,{'linear','quadratic'});
 potcovmod = validatestring(potcovmod,{'cubic'});
 
-% validate positions, gradients, bedIDs
+% validate positions, gradients, bedIDs, pS
 assert(size(pG,2) == 3, 'pG must have x,y,z coordinates')
 assert(size(pZ,2) == 3, 'pZ must have x,y,z coordinates')
+assert(size(X,2) == 3, 'X must have x,y,z coordinates')
 assert(size(G,2) == 3, 'G must have x,y,z components')
 assert(size(pG,1) == size(G,1), 'pG and G must have same number of rows')
 assert(size(pZ,1) == size(bedID,1), ...
