@@ -1,8 +1,18 @@
 # stratpot
 
+Adrian Tasistro-Hart
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0) ![GitHub followers](https://img.shields.io/github/followers/sarttiso?logo=github&style=flat-square)
+
 library for producing numerical models of stratigraphies
 
-**To Do**:
+## 2D Example
+
+Below is an example of stratpot output in two dimensions for a simple stratigraphy defined by four interfaces, for which three interior beds (blue, red, green) are shown.
+
+<img src='figures/stratpot_example_2D.png' width='600px'>
+
+## To Do
 
 -   [ ] look into Gaussian process formulation of stratpot
     -   [ ] allow user to specify uncertainty on bed trace and gradient locations
